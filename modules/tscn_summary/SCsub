@@ -1,7 +1,10 @@
 Import('env')
-module_env = env.Clone()
-module_env.add_source_files(env.modules_sources, [
-'register_types.cpp',
-'tscn_summarizer.cpp',
-'tscn_summary_editor_plugin.cpp',
+
+print(">>> Building module: tscn_summary")
+
+# Core sources (always compiled)
+env.add_source_files(env.modules_sources, [
+    'register_types.cpp',
+    'tscn_summarizer.cpp',
+    'tscn_summary_editor_plugin.cpp',
 ])
