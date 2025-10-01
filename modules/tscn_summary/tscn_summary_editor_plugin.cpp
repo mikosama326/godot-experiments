@@ -80,6 +80,24 @@ TscnSummaryEditorPlugin::TscnSummaryEditorPlugin() {
 	sc_row->add_child(sp_sample_count);
 	dock->add_child(sc_row);
 
+	cb_follow_refs = memnew(CheckBox);
+	cb_follow_refs->set_text("Follow referenced subscenes");
+	cb_follow_refs->set_pressed(false);
+	dock->add_child(cb_follow_refs);
+
+	HBoxContainer *rd = memnew(HBoxContainer);
+	Label *rdl = memnew(Label);
+	rdl->set_text("Reference depth");
+	rd->add_child(rdl);
+	sp_ref_depth = memnew(SpinBox);
+	sp_ref_depth->set_min(0);
+	sp_ref_depth->set_max(6);
+	sp_ref_depth->set_step(1);
+	sp_ref_depth->set_value(1);
+	sp_ref_depth->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	rd->add_child(sp_ref_depth);
+	dock->add_child(rd);
+
 	// Run
 	Button *run = memnew(Button);
 	run->set_text("Summarize");
@@ -137,16 +155,61 @@ void TscnSummaryEditorPlugin::_on_run_pressed() {
 	options["jsonl_chunks"] = cb_jsonl->is_pressed();
 	options["sample_count"] = (int)sp_sample_count->get_value();
 
-	Dictionary result = TSCNSummarizer::summarize(selected_scene_path, options);
-	if (result.is_empty()) {
-		print_error("Summarizer returned empty result.");
-		return;
+	// New: follow references
+	Vector<String> to_process;
+	to_process.push_back(selected_scene_path);
+
+	if (cb_follow_refs->is_pressed()) {
+		const int max_depth = (int)sp_ref_depth->get_value();
+		Array refs = TSCNSummarizer::find_referenced_scenes(selected_scene_path, max_depth);
+		for (int i = 0; i < refs.size(); i++) {
+			String rp = refs[i];
+			// Avoid duplicates and the root scene path
+			if (rp != selected_scene_path) {
+				to_process.push_back(rp);
+			}
+		}
 	}
-	bool ok = TSCNSummarizer::write_output(result, selected_out_path, options);
-	if (!ok) {
-		print_error("Failed to write output.");
-	} else {
-		print_line(String("Wrote summary to: ") + selected_out_path);
+
+	// Summarize the root first, then referenced scenes.
+	// You can either write separate files or aggregate; here we write separate files
+	// next to the chosen path with a suffix.
+	bool all_ok = true;
+
+	// 1) Write the main one to exactly selected_out_path
+	Dictionary result_main = TSCNSummarizer::summarize(selected_scene_path, options);
+	if (result_main.is_empty() || !TSCNSummarizer::write_output(result_main, selected_out_path, options)) {
+		print_error("Failed to write main summary.");
+		all_ok = false;
+	}
+
+	// 2) For referenced scenes, write sibling files with a suffix
+	const String base_dir = selected_out_path.get_base_dir();
+	const String base_file = selected_out_path.get_file().get_basename(); // without .json/.jsonl
+	const String ext = selected_out_path.get_extension(); // "json" or "jsonl"
+
+	for (int i = 1; i < to_process.size(); i++) {
+		const String scene_p = to_process[i];
+		Dictionary r = TSCNSummarizer::summarize(scene_p, options);
+		if (r.is_empty()) {
+			all_ok = false;
+			continue;
+		}
+
+		// Make a safe filename from the scene path
+		String safe = scene_p;
+		safe = safe.replace("res://", "");
+		safe = safe.replace("/", "_").replace("\\", "_");
+
+		const String out_p = vformat("%s/%s__%s.%s", base_dir, base_file, safe, ext);
+		if (!TSCNSummarizer::write_output(r, out_p, options)) {
+			print_error(vformat("Failed to write summary for: %s", scene_p));
+			all_ok = false;
+		}
+	}
+
+	if (all_ok) {
+		print_line("Summaries written (root + referenced).");
 	}
 }
 #endif // #ifdef TOOLS_ENABLED

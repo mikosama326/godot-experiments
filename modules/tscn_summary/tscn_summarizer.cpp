@@ -14,13 +14,13 @@
 #include "scene/2d/node_2d.h"
 #include "scene/2d/sprite_2d.h"
 #include "scene/2d/animated_sprite_2d.h"
+#include <scene/2d/physics/collision_shape_2d.h>
 
 
 #include "scene/3d/node_3d.h"
 #include "scene/3d/mesh_instance_3d.h"
 #include "scene/3d/multimesh_instance_3d.h"
 #include <scene/3d/physics/collision_shape_3d.h>
-#include <scene/2d/physics/collision_shape_2d.h>
 
 // Helper: get an identifying resource path for common node types.
 static String _primary_resource_path(Object *n) {
@@ -96,6 +96,13 @@ static void _accumulate_axis(Dictionary &axis, double v) {
 void TSCNSummarizer::_bind_methods() {
 	ClassDB::bind_static_method("TSCNSummarizer", D_METHOD("summarize", "scene_path", "options"), &TSCNSummarizer::summarize);
 	ClassDB::bind_static_method("TSCNSummarizer", D_METHOD("write_output", "result", "out_path", "options"), &TSCNSummarizer::write_output);
+	ClassDB::bind_static_method("TSCNSummarizer",
+			D_METHOD("find_referenced_scenes", "scene_path", "max_depth"),
+			&TSCNSummarizer::find_referenced_scenes);
+
+	ClassDB::bind_static_method("TSCNSummarizer",
+			D_METHOD("summarize_batch", "scene_paths", "options"),
+			&TSCNSummarizer::summarize_batch);
 }
 
 Dictionary TSCNSummarizer::summarize(const String &scene_path, const Dictionary &options) {
@@ -314,4 +321,112 @@ bool TSCNSummarizer::write_output(const Dictionary &result, const String &out_pa
 	}
 
 	return true;
+}
+// --- Helper: breadth-first collect referenced .tscn via get_scene_file_path() ---
+static void _collect_referenced(Node *root, HashSet<String> &out_paths) {
+	if (!root) {
+		return;
+	}
+	Vector<Node *> q;
+	q.push_back(root);
+
+	while (!q.is_empty()) {
+		Node *n = q[0];
+		q.remove_at(0);
+		if (!n) {
+			continue;
+		}
+
+		// If this node is an instance of another .tscn, get its source path.
+		const String inst_src = n->get_scene_file_path();
+		if (!inst_src.is_empty()) {
+			out_paths.insert(inst_src);
+		}
+
+		const int cc = n->get_child_count();
+		for (int i = 0; i < cc; i++) {
+			q.push_back(n->get_child(i));
+		}
+	}
+}
+
+// Public: load scene, find referenced scenes up to max_depth (following recursively).
+Array TSCNSummarizer::find_referenced_scenes(const String &scene_path, int max_depth) {
+	Array results;
+	if (max_depth <= 0) {
+		return results;
+	}
+
+	// Use edit-state instancing so editor-safe behavior is preserved.
+	Ref<PackedScene> packed = ResourceLoader::load(scene_path);
+	if (packed.is_null()) {
+		return results;
+	}
+	Node *root = Object::cast_to<Node>(packed->instantiate(PackedScene::GEN_EDIT_STATE_INSTANCE));
+	if (!root) {
+		return results;
+	}
+
+	HashSet<String> seen; // all discovered
+	HashSet<String> frontier; // to expand next
+
+	// Seed from the root scene.
+	{
+		HashSet<String> first;
+		_collect_referenced(root, first);
+		for (const String &p : first) {
+			if (p != scene_path) {
+				seen.insert(p);
+				frontier.insert(p);
+			}
+		}
+	}
+
+	// Expand breadth-first up to max_depth - 1 (since we already did depth 1)
+	for (int depth = 1; depth < max_depth && !frontier.is_empty(); depth++) {
+		HashSet<String> next;
+		for (const String &sp : frontier) {
+			Ref<PackedScene> sub = ResourceLoader::load(sp);
+			if (sub.is_null()) {
+				continue;
+			}
+			Node *sub_root = Object::cast_to<Node>(sub->instantiate(PackedScene::GEN_EDIT_STATE_INSTANCE));
+			if (!sub_root) {
+				continue;
+			}
+
+			HashSet<String> refs;
+			_collect_referenced(sub_root, refs);
+			sub_root->queue_free();
+
+			for (const String &rp : refs) {
+				if (!seen.has(rp)) {
+					seen.insert(rp);
+					next.insert(rp);
+				}
+			}
+		}
+		frontier = next;
+	}
+
+	// Done with the first root instance.
+	root->queue_free();
+
+	// Convert to Array (stable-ish order)
+	for (const String &p : seen) {
+		results.push_back(p);
+	}
+	return results;
+}
+
+// Optional convenience to run summarize over many scenes.
+Array TSCNSummarizer::summarize_batch(const Array &scene_paths, const Dictionary &options) {
+	Array out;
+	out.resize(scene_paths.size());
+	for (int i = 0; i < scene_paths.size(); i++) {
+		String sp = scene_paths[i];
+		Dictionary d = summarize(sp, options);
+		out[i] = d;
+	}
+	return out;
 }

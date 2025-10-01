@@ -22,6 +22,8 @@ class TscnSummaryEditorPlugin : public EditorPlugin {
 	CheckBox *cb_compute_stats = nullptr;
 	CheckBox *cb_jsonl = nullptr;
 	SpinBox *sp_sample_count = nullptr;
+	CheckBox *cb_follow_refs = nullptr;
+	SpinBox *sp_ref_depth = nullptr;
 
 	String selected_scene_path;
 	String selected_out_path;
