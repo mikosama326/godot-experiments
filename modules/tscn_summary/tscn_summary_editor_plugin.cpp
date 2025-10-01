@@ -98,6 +98,11 @@ TscnSummaryEditorPlugin::TscnSummaryEditorPlugin() {
 	rd->add_child(sp_ref_depth);
 	dock->add_child(rd);
 
+	cb_include_instances = memnew(CheckBox);
+	cb_include_instances->set_text("Include full instance list (positions)");
+	cb_include_instances->set_pressed(false); // default off (keeps output compact)
+	dock->add_child(cb_include_instances);
+
 	// Run
 	Button *run = memnew(Button);
 	run->set_text("Summarize");
@@ -154,6 +159,7 @@ void TscnSummaryEditorPlugin::_on_run_pressed() {
 	options["compute_stats"] = cb_compute_stats->is_pressed();
 	options["jsonl_chunks"] = cb_jsonl->is_pressed();
 	options["sample_count"] = (int)sp_sample_count->get_value();
+	options["include_instances"] = cb_include_instances->is_pressed();
 
 	// New: follow references
 	Vector<String> to_process;

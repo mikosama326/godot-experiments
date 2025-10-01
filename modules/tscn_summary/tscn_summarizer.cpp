@@ -111,6 +111,7 @@ Dictionary TSCNSummarizer::summarize(const String &scene_path, const Dictionary 
 	const bool sample_instances = options.get("sample_instances", true);
 	const bool compute_stats = options.get("compute_stats", true);
 	const int sample_count = int(options.get("sample_count", 5));
+	const bool include_instances = options.get("include_instances", false); // NEW
 
 	Dictionary result;
 
@@ -131,6 +132,7 @@ Dictionary TSCNSummarizer::summarize(const String &scene_path, const Dictionary 
 
 	// ---- aggregates ----
 	Dictionary archetype_map; // key -> {type, resource, script, count, samples:Array, stats:Dict}
+	Array instances; // NEW: full per-instance list (optional)
 	int node_count = 0;
 	int depth_max = 0;
 	double branching_sum = 0.0;
@@ -192,7 +194,7 @@ Dictionary TSCNSummarizer::summarize(const String &scene_path, const Dictionary 
 		}
 		rec["count"] = int(rec["count"]) + 1;
 
-		// sample & stats
+		// sample & stats, and/or full instance capture
 		const Variant pos_v = _extract_position(n);
 		if (pos_v.get_type() == Variant::DICTIONARY) {
 			const Dictionary pos = pos_v;
@@ -225,6 +227,41 @@ Dictionary TSCNSummarizer::summarize(const String &scene_path, const Dictionary 
 				stats["z"] = zs;
 				rec["stats"] = stats;
 			}
+
+			if (include_instances) {
+				Dictionary inst;
+				inst["path"] = p;
+				inst["type"] = type;
+				inst["resource"] = resource_path;
+				inst["script"] = script_path;
+
+				Array arr;
+				arr.push_back(pos["x"]);
+				arr.push_back(pos["y"]);
+				arr.push_back(pos["z"]);
+				inst["position"] = arr;
+
+				// Optional: source .tscn for instances created from subscenes
+				const String inst_src = n->get_scene_file_path();
+				if (!inst_src.is_empty()) {
+					inst["instance_scene"] = inst_src;
+				}
+
+				instances.push_back(inst);
+			}
+		} else if (include_instances) {
+			// Include even if no position (e.g., non-2D/3D nodes), with null position.
+			Dictionary inst;
+			inst["path"] = p;
+			inst["type"] = type;
+			inst["resource"] = resource_path;
+			inst["script"] = script_path;
+			inst["position"] = Variant(); // null
+			const String inst_src = n->get_scene_file_path();
+			if (!inst_src.is_empty()) {
+				inst["instance_scene"] = inst_src;
+			}
+			instances.push_back(inst);
 		}
 
 		archetype_map[key] = rec;
@@ -261,14 +298,14 @@ Dictionary TSCNSummarizer::summarize(const String &scene_path, const Dictionary 
 		archetypes_arr[i] = out;
 	}
 
-	// (Optional) simple sort; for strict count-desc, we can add a custom comparator later.
+	// (Optional) simple sort; for strict count-desc, add a custom comparator later.
 	archetypes_arr.sort();
 
 	Dictionary engine;
 	engine["name"] = "godot";
 	{
 		Dictionary vi = Engine::get_singleton()->get_version_info();
-		engine["version"] = vi.get("string", String()); // supply default to satisfy IntelliSense
+		engine["version"] = vi.get("string", String());
 	}
 
 	Dictionary topo;
@@ -282,10 +319,15 @@ Dictionary TSCNSummarizer::summarize(const String &scene_path, const Dictionary 
 	result["topology"] = topo;
 	result["archetypes"] = archetypes_arr;
 
+	if (include_instances) {
+		result["instances"] = instances; // NEW
+	}
+
 	// cleanup
 	root->queue_free();
 	return result;
 }
+
 
 
 bool TSCNSummarizer::write_output(const Dictionary &result, const String &out_path, const Dictionary &options) {
